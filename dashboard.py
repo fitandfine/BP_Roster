@@ -2,7 +2,7 @@
 Dashboard for the Roster Management System.
 It includes three tabs:
   1. Employee Management (with improved controls including "days unavailable")
-  2. Roster Creation (dynamic week display, calendar inputs, per–day duty assignment, PDF preview/edit/confirm, and print functionality)
+  2. Roster Creation (dynamic week display, calendar inputs, per–day duty assignment, PDF preview/edit/confirm, print functionality, and remove duty)
   3. Change Password
 
 Dependencies:
@@ -36,8 +36,7 @@ selected_employee_id = None
 # Global dictionary for duty assignments by weekday.
 # For example, global_duties["Monday"] is a list of duty dictionaries assigned for any Monday.
 global_duties = {day: [] for day in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]}
-# When displaying a week’s roster, we build a mapping (roster_duties) from each day’s date (YYYY-MM-DD) to
-# the corresponding weekday’s duties.
+# When displaying a week’s roster, we build a mapping (roster_duties) from each day’s date (YYYY-MM-DD) to the corresponding weekday’s duties.
 roster_duties = {}
 
 # Generate time options in HH:MM format (15-minute increments)
@@ -160,7 +159,6 @@ def init_employee_tab(frame):
         cb.pack(side="left", padx=2)
         days_vars[d] = var
 
-    # Employee list frame
     list_frame = ttk.LabelFrame(frame, text="Registered Employees (Click to Edit)", padding=10)
     list_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
     employee_listbox = tk.Listbox(list_frame, width=60, height=10)
@@ -284,14 +282,14 @@ def init_employee_tab(frame):
 
 
 #########################################
+#########################################
 # Roster Creation Tab
 #########################################
 def init_roster_tab(frame):
-    """Initialize the Roster Creation tab with dynamic week display, duty assignment, and editing capability."""
+    """Initialize the Roster Creation tab with dynamic week display, duty assignment, editing, and removal."""
     global roster_duties
     roster_duties = {}
 
-    # Top frame for roster date range selection
     top_frame = ttk.LabelFrame(frame, text="Select Roster Date Range", padding=10)
     top_frame.pack(fill="x", padx=10, pady=5)
 
@@ -331,7 +329,6 @@ def init_roster_tab(frame):
             d = sd + datetime.timedelta(days=i)
             date_str = d.strftime("%Y-%m-%d")
             weekday = d.strftime("%A")
-            # Get existing duties for this weekday (if any) from global_duties
             roster_duties[date_str] = global_duties.get(weekday, []).copy()
             day_frame = ttk.Frame(week_frame, borderwidth=1, relief="solid", padding=5)
             day_frame.grid(row=i // 2, column=i % 2, padx=5, pady=5, sticky="nsew")
@@ -341,10 +338,12 @@ def init_roster_tab(frame):
             lb.pack(padx=5, pady=5)
             day_listboxes[date_str] = lb
             refresh_day_listbox(date_str)
-            # Bind double-click on duty to edit it.
             lb.bind("<Double-Button-1>", lambda event, ds=date_str: edit_duty(event, ds))
-            btn = tk.Button(day_frame, text="Add Duty", command=lambda ds=date_str: open_add_duty_window(ds))
-            btn.pack(padx=5, pady=5)
+            # Add buttons for Add and Remove Duty
+            btn_frame = ttk.Frame(day_frame)
+            btn_frame.pack(pady=5)
+            ttk.Button(btn_frame, text="Add Duty", command=lambda ds=date_str: open_add_duty_window(ds)).grid(row=0, column=0, padx=5)
+            ttk.Button(btn_frame, text="Remove Duty", command=lambda ds=date_str: remove_duty(ds)).grid(row=0, column=1, padx=5)
 
     def update_end_date(*args):
         try:
@@ -406,35 +405,59 @@ def init_roster_tab(frame):
                 if t_end <= t_start:
                     messagebox.showerror("Invalid Time", "Duty End Time must be later than Start Time.")
                     return
-            except Exception as e:
+            except Exception:
                 messagebox.showerror("Invalid Time Format", "Please ensure times are in HH:MM format.")
                 return
             duty = {"employee": emp_var.get(), "start": duty_start, "end": duty_end}
-            wkday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
+            wkday = weekday
             global_duties[wkday].append(duty)
+            # Refresh all matching days
             sd = start_date_entry.get_date()
             for i in range(7):
-                d = sd + datetime.timedelta(days=i)
-                if d.strftime("%A") == wkday:
-                    key = d.strftime("%Y-%m-%d")
-                    roster_duties[key] = global_duties[wkday].copy()
-                    if key in day_listboxes:
-                        refresh_day_listbox(key)
+                dd = sd + datetime.timedelta(days=i)
+                if dd.strftime("%A") == wkday:
+                    k = dd.strftime("%Y-%m-%d")
+                    roster_duties[k] = global_duties[wkday].copy()
+                    if k in day_listboxes:
+                        refresh_day_listbox(k)
             ad_window.destroy()
 
         ttk.Button(ad_window, text="Save Duty", command=save_duty).grid(row=3, column=0, columnspan=2, pady=10)
 
-    # Function to edit an assigned duty when double-clicked in a listbox.
-    def edit_duty(event, date_str):
+    def remove_duty(date_str):
         lb = day_listboxes.get(date_str)
         if lb is None:
             return
         selection = lb.curselection()
         if not selection:
+            messagebox.showinfo("Remove Duty", "Please select a duty to remove.")
             return
         index = selection[0]
-        # Retrieve the duty from the roster_duties list for that date.
-        duty = roster_duties.get(date_str)[index]
+        weekday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
+        try:
+            del global_duties[weekday][index]
+        except IndexError:
+            messagebox.showerror("Error", "Selected duty not found.")
+            return
+        # Refresh all matching days
+        sd = start_date_entry.get_date()
+        for i in range(7):
+            dd = sd + datetime.timedelta(days=i)
+            if dd.strftime("%A") == weekday:
+                k = dd.strftime("%Y-%m-%d")
+                roster_duties[k] = global_duties[weekday].copy()
+                if k in day_listboxes:
+                    refresh_day_listbox(k)
+
+    def edit_duty(event, date_str):
+        lb = day_listboxes.get(date_str)
+        if not lb:
+            return
+        selection = lb.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        duty = roster_duties[date_str][index]
         weekday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
         ed_window = tk.Toplevel(frame)
         ed_window.title(f"Edit Duty for {weekday}, {date_str}")
@@ -458,11 +481,7 @@ def init_roster_tab(frame):
             ed_window.destroy()
             return
         emp_var = tk.StringVar(ed_window)
-        # Preselect the current employee
-        if duty["employee"] in available_emps:
-            emp_var.set(duty["employee"])
-        else:
-            emp_var.set(available_emps[0])
+        emp_var.set(duty["employee"] if duty["employee"] in available_emps else available_emps[0])
         emp_menu = ttk.OptionMenu(ed_window, emp_var, emp_var.get(), *available_emps)
         emp_menu.grid(row=0, column=1, padx=5, pady=5)
 
@@ -486,31 +505,28 @@ def init_roster_tab(frame):
                 if t_end <= t_start:
                     messagebox.showerror("Invalid Time", "Duty End Time must be later than Start Time.")
                     return
-            except Exception as e:
+            except Exception:
                 messagebox.showerror("Invalid Time Format", "Please ensure times are in HH:MM format.")
                 return
-            # Update the duty entry with the new values.
             duty["employee"] = emp_var.get()
             duty["start"] = new_start
             duty["end"] = new_end
-            wkday = weekday  # already computed
-            # Update global_duties for the weekday: find the duty at same index and update it.
-            if len(global_duties[wkday]) > index:
-                global_duties[wkday][index] = duty.copy()
-            # Now update the display for every day in the week with same weekday.
+            if index < len(global_duties[weekday]):
+                global_duties[weekday][index] = duty.copy()
+            # Refresh all matching days
             sd = start_date_entry.get_date()
             for i in range(7):
-                d = sd + datetime.timedelta(days=i)
-                if d.strftime("%A") == wkday:
-                    key = d.strftime("%Y-%m-%d")
-                    roster_duties[key] = global_duties[wkday].copy()
-                    if key in day_listboxes:
-                        refresh_day_listbox(key)
+                dd = sd + datetime.timedelta(days=i)
+                if dd.strftime("%A") == weekday:
+                    k = dd.strftime("%Y-%m-%d")
+                    roster_duties[k] = global_duties[weekday].copy()
+                    if k in day_listboxes:
+                        refresh_day_listbox(k)
             ed_window.destroy()
 
         ttk.Button(ed_window, text="Save Changes", command=save_edited_duty).grid(row=3, column=0, columnspan=2, pady=10)
 
-    # Finalize Roster Section with Print button included
+    # The actual finalize_roster function remains the same
     def finalize_roster():
         conn = sqlite3.connect('roster.db')
         cursor = conn.cursor()
@@ -522,7 +538,6 @@ def init_roster_tab(frame):
         header_row = ["Day/Name"] + emp_names + ["Weekly Total"]
         emp_week_total = {name: 0.0 for name in emp_names}
         roster_table = [header_row]
-
         sd = start_date_entry.get_date()
         for i in range(7):
             d = sd + datetime.timedelta(days=i)
@@ -531,21 +546,23 @@ def init_roster_tab(frame):
             row_cells = [f"{weekday}, {date_str}"]
             duties = global_duties.get(weekday, [])
             for emp in emp_names:
-                emp_duties = [duty for duty in duties if duty["employee"] == emp]
+                emp_duties = [dy for dy in duties if dy["employee"] == emp]
                 if emp_duties:
-                    cell_text = "\n".join([f"{duty['start']}-{duty['end']}" for duty in emp_duties])
+                    cell_text = "\n".join([f"{dy['start']}-{dy['end']}" for dy in emp_duties])
                     day_total = 0.0
-                    for duty in emp_duties:
-                        t_start = datetime.datetime.strptime(duty["start"], "%H:%M")
-                        t_end = datetime.datetime.strptime(duty["end"], "%H:%M")
-                        day_total += (t_end - t_start).seconds / 3600.0
+                    for dd in emp_duties:
+                        t_s = datetime.datetime.strptime(dd["start"], "%H:%M")
+                        t_e = datetime.datetime.strptime(dd["end"], "%H:%M")
+                        day_total += (t_e - t_s).seconds / 3600.0
                     emp_week_total[emp] += day_total
                     cell_text += f"\n({day_total:.1f} hr)"
                 else:
                     cell_text = ""
                 row_cells.append(cell_text)
-            row_cells.append("")
+            row_cells.append("")  # extra col for "Weekly Total"
             roster_table.append(row_cells)
+
+        # Final row for weekly totals
         total_row = ["Weekly Total"]
         for emp in emp_names:
             total_row.append(f"{emp_week_total[emp]:.1f} hr" if emp_week_total[emp] > 0 else "")
@@ -600,10 +617,13 @@ def init_roster_tab(frame):
         ttk.Button(btn_frame, text="Edit", command=edit_roster).grid(row=0, column=2, padx=5)
         ttk.Button(btn_frame, text="Confirm", command=confirm_roster).grid(row=0, column=3, padx=5)
 
-    # Place Finalize Roster button
+    # Here we ensure the Finalize Roster button is explicitly placed after the week view
+        # --- FINALIZE ROSTER BUTTON ---
     finalize_frame = ttk.Frame(frame, padding=10)
-    finalize_frame.pack(fill="x", padx=10, pady=10)
-    ttk.Button(finalize_frame, text="Finalize Roster", command=finalize_roster).pack()
+    finalize_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+    finalize_frame.place(relx=0, rely=0.95, relwidth=1)
+    finalize_button = ttk.Button(finalize_frame, text="Finalize Roster", command=finalize_roster)
+    finalize_button.pack(pady=5)
 
 
 #########################################
