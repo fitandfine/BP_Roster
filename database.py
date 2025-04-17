@@ -1,74 +1,94 @@
-"""
-This module handles the database connection, schema creation, and migrations.
-We use SQLite as our database.
-"""
-
 import sqlite3
+import os
 
-def create_connection(db_file='roster.db'):
+DB_FILE = 'roster.db'
+ROSTERS_DIR = 'Rosters'
+
+
+def create_connection(db_file=DB_FILE):
     """Create and return a SQLite connection."""
-    conn = sqlite3.connect(db_file)
-    return conn
+    return sqlite3.connect(db_file)
+
 
 def create_tables(conn):
     """Create necessary tables if they do not exist."""
     cursor = conn.cursor()
-    # Create managers table
+
+    # Table for manager credentials
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS managers (
             manager_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
+            username   TEXT NOT NULL UNIQUE,
+            password   TEXT NOT NULL
         )
     ''')
-    # Create staff table with basic fields.
-    # Note: The columns max_hours and days_unavailable may be added later via migration.
+
+    # Table for employee/staff details
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS staff (
-            staff_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone_number TEXT,
-            available_dates TEXT,  -- Format: "from,to|unavailable_dates"
-            available_hours TEXT   -- Format: "from,to|unavailable_hours"
+            staff_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL,
+            email           TEXT NOT NULL,
+            phone_number    TEXT,
+            max_hours       TEXT,
+            days_unavailable TEXT
         )
     ''')
-    # Create roster table to store finalized roster PDF details.
+
+    # Table for roster summary
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS roster (
             roster_id INTEGER PRIMARY KEY AUTOINCREMENT,
             start_date TEXT,
-            end_date TEXT,
-            pdf_file TEXT  -- Path to the generated PDF file
+            end_date   TEXT,
+            pdf_file   TEXT  -- Path to the generated PDF file (inside Rosters/)
         )
     ''')
+
+    # Table for duty details (including special note)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS roster_duties (
+            roster_id  INTEGER,
+            duty_date  TEXT,   -- YYYY-MM-DD
+            employee   TEXT,
+            start_time TEXT,   -- HH:MM
+            end_time   TEXT,   -- HH:MM
+            note       TEXT,   -- Optional daily note for the duty day
+            FOREIGN KEY(roster_id) REFERENCES roster(roster_id)
+        )
+    ''')
+
     conn.commit()
 
-def migrate_staff_table(conn):
-    """
-    Perform a simple migration on the 'staff' table.
-    If the columns max_hours and days_unavailable do not exist, add them.
-    """
+
+def seed_default_manager(conn):
+    """Insert default admin manager if no managers exist."""
     cursor = conn.cursor()
-    # Get current columns in staff table.
-    cursor.execute("PRAGMA table_info(staff)")
-    columns = [row[1] for row in cursor.fetchall()]
-    # Add max_hours column if it doesn't exist.
-    if "max_hours" not in columns:
-        cursor.execute("ALTER TABLE staff ADD COLUMN max_hours TEXT")
-    # Add days_unavailable column if it doesn't exist.
-    if "days_unavailable" not in columns:
-        cursor.execute("ALTER TABLE staff ADD COLUMN days_unavailable TEXT")
-    conn.commit()
+    cursor.execute("SELECT COUNT(*) FROM managers")
+    count = cursor.fetchone()[0]
+    if count == 0:
+        cursor.execute(
+            "INSERT INTO managers (username, password) VALUES (?, ?)",
+            ('admin', 'admin')
+        )
+        print("[✔] Default manager inserted: username=admin, password=admin")
+        conn.commit()
+
+
+def ensure_rosters_folder():
+    """Ensure the folder for storing roster PDFs exists."""
+    os.makedirs(ROSTERS_DIR, exist_ok=True)
+
 
 def initialize_database():
-    """Initialize the database, create tables, and perform migrations if necessary."""
+    """Run all setup tasks: tables, manager seed, PDF folder."""
     conn = create_connection()
     create_tables(conn)
-    migrate_staff_table(conn)
+    seed_default_manager(conn)
     conn.close()
+    ensure_rosters_folder()
+
 
 if __name__ == '__main__':
-    # Initialize database when this module is run directly.
     initialize_database()
-    print("Database and tables created/migrated successfully.")
+    print("[✔] Database initialized and ready.")

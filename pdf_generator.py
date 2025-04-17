@@ -20,7 +20,7 @@ def generate_roster_pdf(roster_data, filename="final_roster.pdf"):
     
     # Define the table style
     style = TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),   # Header background color
+        ('BACKGROUND', (0, 0), (-1, 0), colors.black),   # Header background color
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),     # Header text color
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),                 # Center align all cells
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),       # Bold header font

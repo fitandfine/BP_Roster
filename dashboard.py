@@ -1,679 +1,472 @@
 """
-Dashboard for the Roster Management System.
-It includes three tabs:
-  1. Employee Management (with improved controls including "days unavailable")
-  2. Roster Creation (dynamic week display, calendar inputs, per–day duty assignment, PDF preview/edit/confirm, print functionality, and remove duty)
-  3. Change Password
+Dashboard for the Roster Management System
+==========================================
 
-Dependencies:
-  - tkcalendar (install via: pip install tkcalendar)
-  - reportlab, email_sender, pdf_generator (ensure these modules are available)
+Tabs
+----
+1. Employee Management
+2. Roster Creation  (load‑previous, dynamic week, live hours, duty add/edit/remove,
+                     special notes column, PDF preview/email/print)
+3. Change Password
 
-Note: Ensure that the database has been updated to store additional staff fields:
-   available_dates, available_hours, max_hours, and days_unavailable.
+Deps
+----
+pip install tkcalendar
+(plus your own pdf_generator and email_sender modules)
 """
 
-import tkinter as tk
+import os, sqlite3, datetime, tkinter as tk
 from tkinter import ttk, messagebox
-import sqlite3
-import datetime
-import os
-import pdf_generator
-import email_sender
+import pdf_generator, email_sender
 
-# Import DateEntry for calendar widgets
+# --------------------------------------------------------------------------- #
+#  1 ── basic helpers / globals                                               #
+# --------------------------------------------------------------------------- #
 try:
     from tkcalendar import DateEntry
 except ImportError:
-    messagebox.showerror("Dependency Missing", "tkcalendar not installed. Run: pip install tkcalendar")
+    messagebox.showerror("Dependency Missing",
+                         "tkcalendar not installed.\n> pip install tkcalendar")
     raise
 
-# Global variable for current manager username (set on login)
-current_manager = None
-# Global variable for currently selected employee (for editing)
-selected_employee_id = None
+DB_PATH      = "roster.db"
+ROSTERS_DIR  = "Rosters"
+os.makedirs(ROSTERS_DIR, exist_ok=True)
 
-# Global dictionary for duty assignments by weekday.
-# For example, global_duties["Monday"] is a list of duty dictionaries assigned for any Monday.
-global_duties = {day: [] for day in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]}
-# When displaying a week’s roster, we build a mapping (roster_duties) from each day’s date (YYYY-MM-DD) to the corresponding weekday’s duties.
+current_manager     : str  = None          # set by login‑flow
+selected_employee_id: int  = None          # editing helper
+
+#   weekday‑template that holds *all* duties defined for a weekday
+global_duties = {d: [] for d in
+                 ["Sunday","Monday","Tuesday","Wednesday",
+                  "Thursday","Friday","Saturday"]}
+#   concrete week view:  YYYY‑MM‑DD  →  list[duty]
 roster_duties = {}
+#   special note for each concrete day (in current week view)
+special_notes = {}
 
-# Generate time options in HH:MM format (15-minute increments)
-def generate_time_options():
-    times = []
-    t = datetime.datetime.strptime("00:00", "%H:%M")
+# HH:MM options every 15 min
+def time_options():
+    out, t = [], datetime.datetime.strptime("00:00","%H:%M")
     while t.day == 1:
-        times.append(t.strftime("%H:%M"))
+        out.append(t.strftime("%H:%M"))
         t += datetime.timedelta(minutes=15)
-    return times
+    return out
+TIME_OPTIONS = time_options()
 
-TIME_OPTIONS = generate_time_options()
-
-
-def launch_dashboard(manager_username):
-    """Launch the main dashboard with a tabbed interface."""
+# --------------------------------------------------------------------------- #
+#  2 ── main app launcher                                                     #
+# --------------------------------------------------------------------------- #
+def launch_dashboard(manager_username:str):
     global current_manager
-    current_manager = manager_username  # Save for later use
+    current_manager = manager_username
 
-    dashboard_window = tk.Tk()
-    dashboard_window.title("Roster Management Dashboard")
-    dashboard_window.geometry("900x700")
+    root = tk.Tk()
+    root.title("Roster Management Dashboard")
+    root.geometry("1050x720")
 
-    notebook = ttk.Notebook(dashboard_window)
-    notebook.pack(expand=True, fill="both", padx=10, pady=10)
+    nb = ttk.Notebook(root); nb.pack(expand=True, fill="both", padx=8, pady=8)
 
-    # Create frames for each tab
-    employee_tab = ttk.Frame(notebook)
-    roster_tab = ttk.Frame(notebook)
-    password_tab = ttk.Frame(notebook)
+    emp_tab    = ttk.Frame(nb); nb.add(emp_tab,    text="Employee Management")
+    roster_tab = ttk.Frame(nb); nb.add(roster_tab, text="Roster Creation")
+    pass_tab   = ttk.Frame(nb); nb.add(pass_tab,   text="Change Password")
 
-    notebook.add(employee_tab, text="Employee Management")
-    notebook.add(roster_tab, text="Roster Creation")
-    notebook.add(password_tab, text="Change Password")
+    init_employee_tab(emp_tab)
+    init_roster_tab  (roster_tab)
+    init_password_tab(pass_tab)
 
-    init_employee_tab(employee_tab)
-    init_roster_tab(roster_tab)
-    init_password_tab(password_tab)
+    root.mainloop()
 
-    dashboard_window.mainloop()
-
-
-#########################################
-# Employee Management Tab
-#########################################
-def init_employee_tab(frame):
-    """Initialize the Employee Management tab with employee form and list."""
+# --------------------------------------------------------------------------- #
+#  3 ── EMPLOYEE MANAGEMENT TAB                                               #
+# --------------------------------------------------------------------------- #
+def init_employee_tab(frame:tk.Frame):
     global selected_employee_id
 
-    form_frame = ttk.LabelFrame(frame, text="Employee Details", padding=10)
-    form_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+    # ── form ────────────────────────────────────────────────────────────────
+    f = ttk.LabelFrame(frame, text="Employee Details", padding=10)
+    f.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-    row = 0
-    ttk.Label(form_frame, text="Employee Name:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    name_entry = tk.Entry(form_frame, width=30)
-    name_entry.grid(row=row, column=1, padx=5, pady=5)
-    name_entry.insert(0, "Enter employee name")
+    row=0
+    ttk.Label(f,text="Name").grid         (row=row, column=0, sticky="e", padx=5, pady=3)
+    name_e  = ttk.Entry(f, width=30); name_e.grid (row=row, column=1, padx=5)
 
-    row += 1
-    ttk.Label(form_frame, text="Email:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    email_entry = tk.Entry(form_frame, width=30)
-    email_entry.grid(row=row, column=1, padx=5, pady=5)
-    email_entry.insert(0, "Enter employee email")
+    row+=1
+    ttk.Label(f,text="Email").grid        (row=row, column=0, sticky="e", padx=5, pady=3)
+    email_e = ttk.Entry(f, width=30); email_e.grid(row=row, column=1, padx=5)
 
-    row += 1
-    ttk.Label(form_frame, text="Phone Number:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    phone_entry = tk.Entry(form_frame, width=30)
-    phone_entry.grid(row=row, column=1, padx=5, pady=5)
-    phone_entry.insert(0, "Enter phone number")
+    row+=1
+    ttk.Label(f,text="Phone").grid        (row=row, column=0, sticky="e", padx=5, pady=3)
+    phone_e = ttk.Entry(f, width=30); phone_e.grid(row=row, column=1, padx=5)
 
-    row += 1
-    ttk.Label(form_frame, text="Available Date From:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    date_from_entry = DateEntry(form_frame, width=27, date_pattern="yyyy-mm-dd")
-    date_from_entry.grid(row=row, column=1, padx=5, pady=5)
+    row+=1
+    ttk.Label(f,text="Max hrs / week").grid(row=row, column=0, sticky="e", padx=5, pady=3)
+    maxhrs_e= ttk.Entry(f, width=30); maxhrs_e.grid(row=row, column=1, padx=5)
 
-    row += 1
-    ttk.Label(form_frame, text="Available Date To:").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    date_to_entry = DateEntry(form_frame, width=27, date_pattern="yyyy-mm-dd")
-    date_to_entry.grid(row=row, column=1, padx=5, pady=5)
+    # days unavailable (check‑boxes)
+    row+=1
+    ttk.Label(f,text="Days Unavailable").grid(row=row, column=0, sticky="ne", padx=5, pady=3)
+    days_frame = ttk.Frame(f); days_frame.grid(row=row, column=1, sticky="w")
+    DAYNAMES = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"]
+    day_vars  = {d: tk.IntVar() for d in DAYNAMES}
+    for d in DAYNAMES:
+        ttk.Checkbutton(days_frame,text=d,variable=day_vars[d]
+                       ).pack(side="left", padx=2)
 
-    row += 1
-    ttk.Label(form_frame, text="Dates Unavailable (comma separated):").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    dates_unavail_entry = tk.Entry(form_frame, width=30)
-    dates_unavail_entry.grid(row=row, column=1, padx=5, pady=5)
-    dates_unavail_entry.insert(0, "e.g., 2025-05-05,2025-05-06")
+    # ── list ────────────────────────────────────────────────────────────────
+    list_fr = ttk.LabelFrame(frame, text="Registered Employees", padding=8)
+    list_fr.grid(row=1, column=0, padx=10, pady=5, sticky="nsew")
+    frame.rowconfigure(1, weight=1); frame.columnconfigure(0, weight=1)
 
-    row += 1
-    ttk.Label(form_frame, text="Available Hours From (e.g., 09:00):").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    hours_from_entry = tk.Entry(form_frame, width=30)
-    hours_from_entry.grid(row=row, column=1, padx=5, pady=5)
-    hours_from_entry.insert(0, "e.g., 09:00")
+    emp_list = tk.Listbox(list_fr); emp_list.pack(expand=True, fill="both")
+    def refresh_list():
+        emp_list.delete(0,tk.END)
+        with sqlite3.connect(DB_PATH) as con:
+            for sid,name in con.execute("SELECT staff_id,name FROM staff ORDER BY name"):
+                emp_list.insert(tk.END, f"{sid}:{name}")
+    refresh_list()
 
-    row += 1
-    ttk.Label(form_frame, text="Available Hours To (e.g., 17:00):").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    hours_to_entry = tk.Entry(form_frame, width=30)
-    hours_to_entry.grid(row=row, column=1, padx=5, pady=5)
-    hours_to_entry.insert(0, "e.g., 17:00")
-
-    row += 1
-    ttk.Label(form_frame, text="Hours Unavailable (e.g., 13:00-14:00):").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    hours_unavail_entry = tk.Entry(form_frame, width=30)
-    hours_unavail_entry.grid(row=row, column=1, padx=5, pady=5)
-    hours_unavail_entry.insert(0, "e.g., 13:00-14:00")
-
-    row += 1
-    ttk.Label(form_frame, text="Max Hours per Week (optional):").grid(row=row, column=0, sticky="e", padx=5, pady=5)
-    max_hours_entry = tk.Entry(form_frame, width=30)
-    max_hours_entry.grid(row=row, column=1, padx=5, pady=5)
-    max_hours_entry.insert(0, "Leave blank for no limit")
-
-    row += 1
-    ttk.Label(form_frame, text="Days Unavailable:").grid(row=row, column=0, sticky="ne", padx=5, pady=5)
-    days_frame = ttk.Frame(form_frame)
-    days_frame.grid(row=row, column=1, sticky="w", padx=5, pady=5)
-    day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-    days_vars = {}
-    for d in day_names:
-        var = tk.IntVar()
-        cb = ttk.Checkbutton(days_frame, text=d, variable=var)
-        cb.pack(side="left", padx=2)
-        days_vars[d] = var
-
-    list_frame = ttk.LabelFrame(frame, text="Registered Employees (Click to Edit)", padding=10)
-    list_frame.grid(row=1, column=0, padx=10, pady=10, sticky="nsew")
-    employee_listbox = tk.Listbox(list_frame, width=60, height=10)
-    employee_listbox.pack(fill="both", padx=5, pady=5)
-
-    def refresh_employee_list():
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT staff_id, name FROM staff")
-        employees = cursor.fetchall()
-        conn.close()
-        employee_listbox.delete(0, tk.END)
-        for emp in employees:
-            employee_listbox.insert(tk.END, f"ID:{emp[0]} - {emp[1]}")
-
-    refresh_employee_list()
-
-    def on_employee_select(event):
+    def fill_form(event=None):
         global selected_employee_id
-        selection = employee_listbox.curselection()
-        if selection:
-            index = selection[0]
-            selected_text = employee_listbox.get(index)
-            selected_id = selected_text.split(" - ")[0].split(":")[1]
-            selected_employee_id = int(selected_id)
-            conn = sqlite3.connect('roster.db')
-            cursor = conn.cursor()
-            cursor.execute("SELECT name, email, phone_number, available_dates, available_hours, max_hours, days_unavailable FROM staff WHERE staff_id=?", (selected_employee_id,))
-            record = cursor.fetchone()
-            conn.close()
-            if record:
-                name_entry.delete(0, tk.END)
-                name_entry.insert(0, record[0])
-                email_entry.delete(0, tk.END)
-                email_entry.insert(0, record[1])
-                phone_entry.delete(0, tk.END)
-                phone_entry.insert(0, record[2])
-                if record[3] and "|" in record[3]:
-                    parts = record[3].split("|")
-                    date_range = parts[0].split(",")
-                    unavail_dates = parts[1]
-                    date_from_entry.set_date(date_range[0])
-                    date_to_entry.set_date(date_range[1])
-                    dates_unavail_entry.delete(0, tk.END)
-                    dates_unavail_entry.insert(0, unavail_dates)
-                else:
-                    date_from_entry.set_date(datetime.date.today())
-                    date_to_entry.set_date(datetime.date.today())
-                    dates_unavail_entry.delete(0, tk.END)
-                if record[4] and "|" in record[4]:
-                    parts = record[4].split("|")
-                    hour_range = parts[0].split(",")
-                    unavail_hours = parts[1]
-                    hours_from_entry.delete(0, tk.END)
-                    hours_from_entry.insert(0, hour_range[0])
-                    hours_to_entry.delete(0, tk.END)
-                    hours_to_entry.insert(0, hour_range[1])
-                    hours_unavail_entry.delete(0, tk.END)
-                    hours_unavail_entry.insert(0, unavail_hours)
-                else:
-                    hours_from_entry.delete(0, tk.END)
-                    hours_to_entry.delete(0, tk.END)
-                    hours_unavail_entry.delete(0, tk.END)
-                max_hours_entry.delete(0, tk.END)
-                max_hours_entry.insert(0, record[5] if record[5] is not None else "")
-                for d in day_names:
-                    days_vars[d].set(0)
-                if record[6]:
-                    for day in record[6].split(","):
-                        day = day.strip()
-                        if day in days_vars:
-                            days_vars[day].set(1)
+        sel = emp_list.curselection()
+        if not sel: return
+        sid = int(emp_list.get(sel[0]).split(":")[0])
+        selected_employee_id=sid
+        with sqlite3.connect(DB_PATH) as con:
+            cur = con.cursor()
+            cur.execute("""SELECT name,email,phone_number,max_hours,days_unavailable
+                           FROM staff WHERE staff_id=?""",(sid,))
+            n,e,p,mh,du = cur.fetchone()
+        name_e.delete (0,tk.END); name_e.insert (0,n)
+        email_e.delete(0,tk.END); email_e.insert(0,e)
+        phone_e.delete(0,tk.END); phone_e.insert(0,p)
+        maxhrs_e.delete(0,tk.END); maxhrs_e.insert(0,mh or "")
+        for d in DAYNAMES: day_vars[d].set(0)
+        if du:
+            for d in du.split(","): day_vars[d.strip()].set(1)
+    emp_list.bind("<<ListboxSelect>>", fill_form)
 
-    employee_listbox.bind("<<ListboxSelect>>", on_employee_select)
-
-    def save_employee():
+    # ── save / update ───────────────────────────────────────────────────────
+    def save_emp():
         global selected_employee_id
-        name = name_entry.get()
-        email = email_entry.get()
-        phone = phone_entry.get()
-        available_dates = f"{date_from_entry.get_date()},{date_to_entry.get_date()}|{dates_unavail_entry.get()}"
-        available_hours = f"{hours_from_entry.get()},{hours_to_entry.get()}|{hours_unavail_entry.get()}"
-        max_hours = max_hours_entry.get().strip()
-        max_hours = max_hours if max_hours != "" else None
-        unavailable_days = [d for d, var in days_vars.items() if var.get() == 1]
-        days_unavailable = ",".join(unavailable_days)
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        if selected_employee_id:
-            cursor.execute("""
-                UPDATE staff 
-                SET name=?, email=?, phone_number=?, available_dates=?, available_hours=?, max_hours=?, days_unavailable=?
-                WHERE staff_id=?""",
-                (name, email, phone, available_dates, available_hours, max_hours, days_unavailable, selected_employee_id))
-            messagebox.showinfo("Updated", "Employee record updated successfully.")
-        else:
-            cursor.execute("""
-                INSERT INTO staff (name, email, phone_number, available_dates, available_hours, max_hours, days_unavailable)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (name, email, phone, available_dates, available_hours, max_hours, days_unavailable))
-            messagebox.showinfo("Added", "Employee added successfully.")
-        conn.commit()
-        conn.close()
-        selected_employee_id = None
-        name_entry.delete(0, tk.END)
-        email_entry.delete(0, tk.END)
-        phone_entry.delete(0, tk.END)
-        date_from_entry.set_date(datetime.date.today())
-        date_to_entry.set_date(datetime.date.today())
-        dates_unavail_entry.delete(0, tk.END)
-        hours_from_entry.delete(0, tk.END)
-        hours_to_entry.delete(0, tk.END)
-        hours_unavail_entry.delete(0, tk.END)
-        max_hours_entry.delete(0, tk.END)
-        for d in day_names:
-            days_vars[d].set(0)
-        refresh_employee_list()
-
-    btn = tk.Button(form_frame, text="Add / Update Employee", command=save_employee)
-    btn.grid(row=row + 1, column=0, columnspan=2, pady=10)
-
-
-#########################################
-#########################################
-# Roster Creation Tab
-#########################################
-def init_roster_tab(frame):
-    """Initialize the Roster Creation tab with dynamic week display, duty assignment, editing, and removal."""
-    global roster_duties
-    roster_duties = {}
-
-    top_frame = ttk.LabelFrame(frame, text="Select Roster Date Range", padding=10)
-    top_frame.pack(fill="x", padx=10, pady=5)
-
-    ttk.Label(top_frame, text="Roster Start Date:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
-    start_date_entry = DateEntry(top_frame, width=15, date_pattern="yyyy-mm-dd")
-    start_date_entry.grid(row=0, column=1, padx=5, pady=5)
-
-    ttk.Label(top_frame, text="Roster End Date:").grid(row=0, column=2, sticky="e", padx=5, pady=5)
-    end_date_entry = DateEntry(top_frame, width=15, date_pattern="yyyy-mm-dd")
-    end_date_entry.grid(row=0, column=3, padx=5, pady=5)
-
-    # Week view frame
-    week_frame = ttk.LabelFrame(frame, text="Week Duties", padding=10)
-    week_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
-    # Dictionary to hold Listbox widgets for each day (key: date string)
-    day_listboxes = {}
-
-    def refresh_day_listbox(date_str):
-        lb = day_listboxes.get(date_str)
-        if lb is not None:
-            lb.delete(0, tk.END)
-            duties_list = roster_duties.get(date_str, [])
-            if duties_list:
-                for duty in duties_list:
-                    lb.insert(tk.END, f"{duty['employee']} ({duty['start']}-{duty['end']})")
+        vals = { "name":  name_e.get().strip(),
+                 "email": email_e.get().strip(),
+                 "phone": phone_e.get().strip(),
+                 "maxh":  maxhrs_e.get().strip() or None,
+                 "du":    ",".join([d for d,v in day_vars.items() if v.get()==1]) }
+        with sqlite3.connect(DB_PATH) as con:
+            cur = con.cursor()
+            if selected_employee_id:
+                cur.execute("""UPDATE staff
+                               SET name=?,email=?,phone_number=?,max_hours=?,days_unavailable=?
+                               WHERE staff_id=?""",
+                            (vals["name"],vals["email"],vals["phone"],
+                             vals["maxh"],vals["du"], selected_employee_id))
             else:
-                lb.insert(tk.END, "(No duties assigned)")
+                cur.execute("""INSERT INTO staff(name,email,phone_number,max_hours,days_unavailable)
+                               VALUES(?,?,?,?,?)""",
+                            (vals["name"],vals["email"],vals["phone"],vals["maxh"],vals["du"]))
+        selected_employee_id=None
+        for e in (name_e,email_e,phone_e,maxhrs_e): e.delete(0,tk.END)
+        for v in day_vars.values(): v.set(0)
+        refresh_list()
+        messagebox.showinfo("Saved","Employee record saved.")
 
-    def update_week_display():
-        for widget in week_frame.winfo_children():
-            widget.destroy()
-        day_listboxes.clear()
-        roster_duties.clear()
-        sd = start_date_entry.get_date()
+    ttk.Button(f,text="Add / Update Employee", command=save_emp
+              ).grid(row=row+1, column=0, columnspan=2, pady=8)
+
+# --------------------------------------------------------------------------- #
+#  4 ── ROSTER CREATION TAB                                                   #
+# --------------------------------------------------------------------------- #
+def init_roster_tab(frame:tk.Frame):
+    global roster_duties, global_duties, special_notes
+
+    # ── top bar : previous roster selector + date range ─────────────────────
+    top = ttk.Frame(frame); top.pack(fill="x", padx=10, pady=5)
+
+    ttk.Label(top,text="Load Previous Roster").grid(row=0,column=0,sticky="e")
+    prev_var  = tk.StringVar()
+    prev_combo= ttk.Combobox(top,textvariable=prev_var,width=35,state="readonly")
+    prev_combo.grid(row=0,column=1,padx=5)
+
+    ttk.Label(top,text="Start").grid(row=0,column=2,sticky="e")
+    start_e = DateEntry(top,width=12,date_pattern="yyyy-mm-dd"); start_e.grid(row=0,column=3,padx=3)
+    ttk.Label(top,text="End").grid(row=0,column=4,sticky="e")
+    end_e   = DateEntry(top,width=12,date_pattern="yyyy-mm-dd");   end_e.grid  (row=0,column=5,padx=3)
+
+    def populate_history():
+        with sqlite3.connect(DB_PATH) as con:
+            rows = con.execute("""SELECT roster_id,start_date,end_date
+                                  FROM roster ORDER BY roster_id DESC""").fetchall()
+        prev_combo["values"]=[f"{r[0]}: {r[1]} → {r[2]}" for r in rows]
+    populate_history()
+
+    # ── main split : week grid + sidebar ────────────────────────────────────
+    main = ttk.Frame(frame); main.pack(expand=True,fill="both", padx=10, pady=5)
+    week_fr = ttk.LabelFrame(main,text="Week Duties"); week_fr.pack(side="left",expand=True,fill="both")
+    side_fr = ttk.LabelFrame(main,text="Hours / Notes"); side_fr.pack(side="left",fill="y",padx=(5,0))
+
+    hours_lb = tk.Listbox(side_fr,width=28); hours_lb.pack(expand=True,fill="y",padx=5,pady=5)
+    notes_container = ttk.Frame(side_fr); notes_container.pack(fill="x",padx=5)
+
+    day_lbs = {}   # concrete‑day listboxes (for refresh)
+
+    # ---------- helper ----------------------------------------------------- #
+    def refresh_hours():
+        hours_lb.delete(0,tk.END)
+        with sqlite3.connect(DB_PATH) as con:
+            emps=[r[0] for r in con.execute("SELECT name FROM staff")]
+        totals={e:0.0 for e in emps}
+        for duties in global_duties.values():
+            for d in duties:
+                dur=(datetime.datetime.strptime(d["end"],"%H:%M")
+                     -datetime.datetime.strptime(d["start"],"%H:%M")).seconds/3600.0
+                totals[d["employee"]]+=dur
+        for e in emps:
+            hours_lb.insert(tk.END,f"{e}: {totals[e]:.1f} hr")
+
+    def refresh_day(ds):
+        lb=day_lbs[ds]; lb.delete(0,tk.END)
+        items=roster_duties.get(ds,[])
+        if not items: lb.insert(tk.END,"(No duties)")
+        for it in items:
+            lb.insert(tk.END,f"{it['employee']} ({it['start']}-{it['end']})")
+
+    # ---------- build / rebuild week view ---------------------------------- #
+    def build_week():
+        for w in week_fr.winfo_children(): w.destroy()
+        for w in notes_container.winfo_children(): w.destroy()
+        day_lbs.clear(); special_notes.clear()
+
+        sd=start_e.get_date(); end_e.set_date(sd+datetime.timedelta(days=6))
+
         for i in range(7):
-            d = sd + datetime.timedelta(days=i)
-            date_str = d.strftime("%Y-%m-%d")
-            weekday = d.strftime("%A")
-            roster_duties[date_str] = global_duties.get(weekday, []).copy()
-            day_frame = ttk.Frame(week_frame, borderwidth=1, relief="solid", padding=5)
-            day_frame.grid(row=i // 2, column=i % 2, padx=5, pady=5, sticky="nsew")
-            header = f"{weekday}, {date_str}"
-            ttk.Label(day_frame, text=header, font=("Helvetica", 10, "bold")).pack(anchor="w")
-            lb = tk.Listbox(day_frame, width=40, height=4)
-            lb.pack(padx=5, pady=5)
-            day_listboxes[date_str] = lb
-            refresh_day_listbox(date_str)
-            lb.bind("<Double-Button-1>", lambda event, ds=date_str: edit_duty(event, ds))
-            # Add buttons for Add and Remove Duty
-            btn_frame = ttk.Frame(day_frame)
-            btn_frame.pack(pady=5)
-            ttk.Button(btn_frame, text="Add Duty", command=lambda ds=date_str: open_add_duty_window(ds)).grid(row=0, column=0, padx=5)
-            ttk.Button(btn_frame, text="Remove Duty", command=lambda ds=date_str: remove_duty(ds)).grid(row=0, column=1, padx=5)
+            d = sd+datetime.timedelta(days=i)
+            ds=d.strftime("%Y-%m-%d"); wd=d.strftime("%A")
+            roster_duties[ds]=list(global_duties[wd])  # copy
+            special_notes[ds]=""
 
-    def update_end_date(*args):
-        try:
-            sd = start_date_entry.get_date()
-            ed = sd + datetime.timedelta(days=6)
-            end_date_entry.set_date(ed)
-            update_week_display()
-        except Exception as e:
-            print("Error updating end date:", e)
+            cell=ttk.Frame(week_fr,borderwidth=1,relief="solid",padding=4)
+            cell.grid(row=i//2,column=i%2,sticky="nsew",padx=4,pady=4)
+            ttk.Label(cell,text=f"{wd}, {ds}",font=("Helvetica",10,"bold")).pack(anchor="w")
 
-    start_date_entry.bind("<<DateEntrySelected>>", update_end_date)
-    update_end_date()
+            lb=tk.Listbox(cell,width=40,height=4); lb.pack()
+            day_lbs[ds]=lb; refresh_day(ds)
+            lb.bind("<Double-Button-1>",lambda e,ds=ds: edit_duty(ds))
 
-    def open_add_duty_window(date_str):
-        weekday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
-        ad_window = tk.Toplevel(frame)
-        ad_window.title(f"Add Duty for {weekday}, {date_str}")
-        ad_window.grab_set()
+            bf=ttk.Frame(cell); bf.pack(pady=3)
+            ttk.Button(bf,text="Add",
+                       command=lambda ds=ds: add_duty(ds)).pack(side="left",padx=2)
+            ttk.Button(bf,text="Remove",
+                       command=lambda ds=ds: remove_duty(ds)).pack(side="left",padx=2)
 
-        ttk.Label(ad_window, text="Select Employee:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, days_unavailable FROM staff")
-        emp_records = cursor.fetchall()
-        conn.close()
-        available_emps = []
-        for rec in emp_records:
-            emp_name = rec[0]
-            days_unavail = rec[1] if rec[1] else ""
-            if weekday in [d.strip() for d in days_unavail.split(",") if d.strip()]:
-                continue
-            available_emps.append(emp_name)
-        if not available_emps:
-            messagebox.showerror("No Available Employees", f"No employees available on {weekday}.")
-            ad_window.destroy()
-            return
-        emp_var = tk.StringVar(ad_window)
-        emp_var.set(available_emps[0])
-        emp_menu = ttk.OptionMenu(ad_window, emp_var, available_emps[0], *available_emps)
-        emp_menu.grid(row=0, column=1, padx=5, pady=5)
+            # note input line in sidebar
+            nt=tk.Entry(notes_container,width=26)
+            nt.pack(fill="x",pady=1)
+            nt.insert(0,"")  # blank
+            def save_note(ev,ds=ds,e=nt): special_notes[ds]=e.get()
+            nt.bind("<FocusOut>",save_note)
 
-        ttk.Label(ad_window, text="Duty Start Time:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
-        start_time_cb = ttk.Combobox(ad_window, values=TIME_OPTIONS, width=8)
-        start_time_cb.grid(row=1, column=1, padx=5, pady=5)
-        start_time_cb.set("09:00")
+        refresh_hours()
 
-        ttk.Label(ad_window, text="Duty End Time:").grid(row=2, column=0, sticky="e", padx=5, pady=5)
-        end_time_cb = ttk.Combobox(ad_window, values=TIME_OPTIONS, width=8)
-        end_time_cb.grid(row=2, column=1, padx=5, pady=5)
-        end_time_cb.set("12:00")
+    # ---------- add / Edit / remove duties --------------------------------- #
+    def _available_employee_list(wday):
+        with sqlite3.connect(DB_PATH) as con:
+            rows=con.execute("SELECT name,days_unavailable FROM staff").fetchall()
+        return [n for n,du in rows if not du or wday not in du.split(",")]
 
-        def save_duty():
-            duty_start = start_time_cb.get()
-            duty_end = end_time_cb.get()
-            try:
-                fmt = "%H:%M"
-                t_start = datetime.datetime.strptime(duty_start, fmt)
-                t_end = datetime.datetime.strptime(duty_end, fmt)
-                if t_end <= t_start:
-                    messagebox.showerror("Invalid Time", "Duty End Time must be later than Start Time.")
-                    return
-            except Exception:
-                messagebox.showerror("Invalid Time Format", "Please ensure times are in HH:MM format.")
-                return
-            duty = {"employee": emp_var.get(), "start": duty_start, "end": duty_end}
-            wkday = weekday
-            global_duties[wkday].append(duty)
-            # Refresh all matching days
-            sd = start_date_entry.get_date()
-            for i in range(7):
-                dd = sd + datetime.timedelta(days=i)
-                if dd.strftime("%A") == wkday:
-                    k = dd.strftime("%Y-%m-%d")
-                    roster_duties[k] = global_duties[wkday].copy()
-                    if k in day_listboxes:
-                        refresh_day_listbox(k)
-            ad_window.destroy()
+    def add_duty(ds):
+        wday=datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%A")
+        avail=_available_employee_list(wday)
+        if not avail:
+            messagebox.showinfo("Info",f"No employees available on {wday}."); return
+        win=tk.Toplevel(); win.title(f"Add ({ds})"); win.grab_set()
 
-        ttk.Button(ad_window, text="Save Duty", command=save_duty).grid(row=3, column=0, columnspan=2, pady=10)
+        ttk.Label(win,text="Employee").grid(row=0,column=0,padx=5,pady=4,sticky="e")
+        emp_var=tk.StringVar(value=avail[0])
+        ttk.Combobox(win,textvariable=emp_var,values=avail,state="readonly"
+                    ).grid(row=0,column=1,padx=5,pady=4)
 
-    def remove_duty(date_str):
-        lb = day_listboxes.get(date_str)
-        if lb is None:
-            return
-        selection = lb.curselection()
-        if not selection:
-            messagebox.showinfo("Remove Duty", "Please select a duty to remove.")
-            return
-        index = selection[0]
-        weekday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
-        try:
-            del global_duties[weekday][index]
-        except IndexError:
-            messagebox.showerror("Error", "Selected duty not found.")
-            return
-        # Refresh all matching days
-        sd = start_date_entry.get_date()
+        ttk.Label(win,text="Start").grid(row=1,column=0,sticky="e")
+        st_var=tk.StringVar(value="09:00")
+        ttk.Combobox(win,textvariable=st_var,values=TIME_OPTIONS,width=8
+                    ).grid(row=1,column=1)
+
+        ttk.Label(win,text="End").grid(row=2,column=0,sticky="e")
+        et_var=tk.StringVar(value="17:00")
+        ttk.Combobox(win,textvariable=et_var,values=TIME_OPTIONS,width=8
+                    ).grid(row=2,column=1)
+
+        def save():
+            s,e=st_var.get(),et_var.get()
+            if datetime.datetime.strptime(e,"%H:%M")<=datetime.datetime.strptime(s,"%H:%M"):
+                messagebox.showerror("Error","End must be after Start"); return
+            global_duties[wday].append({"employee":emp_var.get(),"start":s,"end":e})
+            build_week(); win.destroy()
+        ttk.Button(win,text="Save",command=save).grid(row=3,column=0,columnspan=2,pady=6)
+
+    def edit_duty(ds):
+        lb=day_lbs[ds]; sel=lb.curselection()
+        if not sel: return
+        idx=sel[0]
+        duty=roster_duties[ds][idx]
+        wday=datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%A")
+        avail=_available_employee_list(wday)
+        win=tk.Toplevel(); win.title(f"Edit ({ds})"); win.grab_set()
+
+        emp_var=tk.StringVar(value=duty["employee"])
+        st_var=tk.StringVar(value=duty["start"])
+        et_var=tk.StringVar(value=duty["end"])
+
+        ttk.Label(win,text="Employee").grid(row=0,column=0,padx=5,pady=4,sticky="e")
+        ttk.Combobox(win,textvariable=emp_var,values=avail,state="readonly"
+                    ).grid(row=0,column=1,padx=5,pady=4)
+        ttk.Label(win,text="Start").grid(row=1,column=0,sticky="e")
+        ttk.Combobox(win,textvariable=st_var,values=TIME_OPTIONS,width=8
+                    ).grid(row=1,column=1)
+        ttk.Label(win,text="End").grid(row=2,column=0,sticky="e")
+        ttk.Combobox(win,textvariable=et_var,values=TIME_OPTIONS,width=8
+                    ).grid(row=2,column=1)
+
+        def save():
+            s,e=st_var.get(),et_var.get()
+            if datetime.datetime.strptime(e,"%H:%M")<=datetime.datetime.strptime(s,"%H:%M"):
+                messagebox.showerror("Error","End must be after Start"); return
+            duty.update(employee=emp_var.get(),start=s,end=e)
+            global_duties[wday][idx]=duty.copy()
+            build_week(); win.destroy()
+        ttk.Button(win,text="Save",command=save).grid(row=3,column=0,columnspan=2,pady=6)
+
+    def remove_duty(ds):
+        lb=day_lbs[ds]; sel=lb.curselection()
+        if not sel: return
+        wday=datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%A")
+        global_duties[wday].pop(sel[0])
+        build_week()
+
+    # ---------- load previous roster --------------------------------------- #
+    def load_prev(event=None):
+        sel=prev_var.get()
+        if not sel: return
+        rid=int(sel.split(":")[0])
+        for lst in global_duties.values(): lst.clear()
+        with sqlite3.connect(DB_PATH) as con:
+            cur=con.cursor()
+            cur.execute("""SELECT duty_date,employee,start_time,end_time,note
+                           FROM roster_duties WHERE roster_id=?""",(rid,))
+            for ds,emp,st,et,note in cur.fetchall():
+                wd=datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%A")
+                global_duties[wd].append({"employee":emp,"start":st,"end":et})
+                special_notes[ds]=note or ""
+            cur.execute("SELECT start_date,end_date FROM roster WHERE roster_id=?", (rid,))
+            sd,ed=cur.fetchone()
+        start_e.set_date(datetime.datetime.strptime(sd,"%Y-%m-%d").date())
+        end_e.set_date  (datetime.datetime.strptime(ed,"%Y-%m-%d").date())
+        build_week()
+        # re‑inject notes text boxes
+        for ds, txt in special_notes.items():
+            if ds in notes_container.children:
+                notes_container.children[ds].delete(0,tk.END)
+                notes_container.children[ds].insert(0,txt)
+    prev_combo.bind("<<ComboboxSelected>>", load_prev)
+
+    # ---------- finalize & generate pdf ------------------------------------ #
+    def finalize():
+        sd=start_e.get_date(); ed=end_e.get_date()
+        sd_s,ed_s=sd.strftime("%Y-%m-%d"),ed.strftime("%Y-%m-%d")
+        with sqlite3.connect(DB_PATH) as con:
+            cur=con.cursor()
+            cur.execute("INSERT INTO roster(start_date,end_date,pdf_file) VALUES(?,?,?)",
+                        (sd_s,ed_s,""))
+            rid=cur.lastrowid
+            for ds,dlist in roster_duties.items():
+                note=special_notes.get(ds,"")
+                for d in dlist:
+                    cur.execute("""INSERT INTO roster_duties
+                                   (roster_id,duty_date,employee,start_time,end_time,note)
+                                   VALUES(?,?,?,?,?,?)""",
+                                (rid,ds,d["employee"],d["start"],d["end"],note))
+        populate_history()
+
+        # build PDF table
+        with sqlite3.connect(DB_PATH) as con:
+            emp_names=[r[0] for r in con.execute("SELECT name FROM staff")]
+        header=["Day/Name"]+emp_names+["Note"]
+        totals={e:0.0 for e in emp_names}
+        table=[header]
         for i in range(7):
-            dd = sd + datetime.timedelta(days=i)
-            if dd.strftime("%A") == weekday:
-                k = dd.strftime("%Y-%m-%d")
-                roster_duties[k] = global_duties[weekday].copy()
-                if k in day_listboxes:
-                    refresh_day_listbox(k)
-
-    def edit_duty(event, date_str):
-        lb = day_listboxes.get(date_str)
-        if not lb:
-            return
-        selection = lb.curselection()
-        if not selection:
-            return
-        index = selection[0]
-        duty = roster_duties[date_str][index]
-        weekday = datetime.datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
-        ed_window = tk.Toplevel(frame)
-        ed_window.title(f"Edit Duty for {weekday}, {date_str}")
-        ed_window.grab_set()
-
-        ttk.Label(ed_window, text="Select Employee:").grid(row=0, column=0, sticky="e", padx=5, pady=5)
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, days_unavailable FROM staff")
-        emp_records = cursor.fetchall()
-        conn.close()
-        available_emps = []
-        for rec in emp_records:
-            emp_name = rec[0]
-            days_unavail = rec[1] if rec[1] else ""
-            if weekday in [d.strip() for d in days_unavail.split(",") if d.strip()]:
-                continue
-            available_emps.append(emp_name)
-        if not available_emps:
-            messagebox.showerror("No Available Employees", f"No employees available on {weekday}.")
-            ed_window.destroy()
-            return
-        emp_var = tk.StringVar(ed_window)
-        emp_var.set(duty["employee"] if duty["employee"] in available_emps else available_emps[0])
-        emp_menu = ttk.OptionMenu(ed_window, emp_var, emp_var.get(), *available_emps)
-        emp_menu.grid(row=0, column=1, padx=5, pady=5)
-
-        ttk.Label(ed_window, text="Duty Start Time:").grid(row=1, column=0, sticky="e", padx=5, pady=5)
-        start_time_cb = ttk.Combobox(ed_window, values=TIME_OPTIONS, width=8)
-        start_time_cb.grid(row=1, column=1, padx=5, pady=5)
-        start_time_cb.set(duty["start"])
-
-        ttk.Label(ed_window, text="Duty End Time:").grid(row=2, column=0, sticky="e", padx=5, pady=5)
-        end_time_cb = ttk.Combobox(ed_window, values=TIME_OPTIONS, width=8)
-        end_time_cb.grid(row=2, column=1, padx=5, pady=5)
-        end_time_cb.set(duty["end"])
-
-        def save_edited_duty():
-            new_start = start_time_cb.get()
-            new_end = end_time_cb.get()
-            try:
-                fmt = "%H:%M"
-                t_start = datetime.datetime.strptime(new_start, fmt)
-                t_end = datetime.datetime.strptime(new_end, fmt)
-                if t_end <= t_start:
-                    messagebox.showerror("Invalid Time", "Duty End Time must be later than Start Time.")
-                    return
-            except Exception:
-                messagebox.showerror("Invalid Time Format", "Please ensure times are in HH:MM format.")
-                return
-            duty["employee"] = emp_var.get()
-            duty["start"] = new_start
-            duty["end"] = new_end
-            if index < len(global_duties[weekday]):
-                global_duties[weekday][index] = duty.copy()
-            # Refresh all matching days
-            sd = start_date_entry.get_date()
-            for i in range(7):
-                dd = sd + datetime.timedelta(days=i)
-                if dd.strftime("%A") == weekday:
-                    k = dd.strftime("%Y-%m-%d")
-                    roster_duties[k] = global_duties[weekday].copy()
-                    if k in day_listboxes:
-                        refresh_day_listbox(k)
-            ed_window.destroy()
-
-        ttk.Button(ed_window, text="Save Changes", command=save_edited_duty).grid(row=3, column=0, columnspan=2, pady=10)
-
-    # The actual finalize_roster function remains the same
-    def finalize_roster():
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT name, email FROM staff")
-        all_emps = cursor.fetchall()
-        conn.close()
-        emp_names = [emp[0] for emp in all_emps]
-
-        header_row = ["Day/Name"] + emp_names + ["Weekly Total"]
-        emp_week_total = {name: 0.0 for name in emp_names}
-        roster_table = [header_row]
-        sd = start_date_entry.get_date()
-        for i in range(7):
-            d = sd + datetime.timedelta(days=i)
-            date_str = d.strftime("%Y-%m-%d")
-            weekday = d.strftime("%A")
-            row_cells = [f"{weekday}, {date_str}"]
-            duties = global_duties.get(weekday, [])
+            d=sd+datetime.timedelta(days=i)
+            ds=d.strftime("%Y-%m-%d"); wd=d.strftime("%A")
+            row=[f"{wd}, {ds}"]
             for emp in emp_names:
-                emp_duties = [dy for dy in duties if dy["employee"] == emp]
-                if emp_duties:
-                    cell_text = "\n".join([f"{dy['start']}-{dy['end']}" for dy in emp_duties])
-                    day_total = 0.0
-                    for dd in emp_duties:
-                        t_s = datetime.datetime.strptime(dd["start"], "%H:%M")
-                        t_e = datetime.datetime.strptime(dd["end"], "%H:%M")
-                        day_total += (t_e - t_s).seconds / 3600.0
-                    emp_week_total[emp] += day_total
-                    cell_text += f"\n({day_total:.1f} hr)"
-                else:
-                    cell_text = ""
-                row_cells.append(cell_text)
-            row_cells.append("")  # extra col for "Weekly Total"
-            roster_table.append(row_cells)
+                seg=[x for x in roster_duties[ds] if x['employee']==emp]
+                text=""; day_sum=0.0
+                for s in seg:
+                    text+=f"{s['start']}-{s['end']}\n"
+                    day_sum+=(datetime.datetime.strptime(s['end'],"%H:%M")
+                              -datetime.datetime.strptime(s['start'],"%H:%M")).seconds/3600
+                if day_sum: text+=f"({day_sum:.1f} hr)"
+                totals[emp]+=day_sum
+                row.append(text)
+            row.append(special_notes.get(ds,""))
+            table.append(row)
+        table.append(["Weekly Total"]+[f"{totals[e]:.1f} hr" for e in emp_names]+[""])
 
-        # Final row for weekly totals
-        total_row = ["Weekly Total"]
-        for emp in emp_names:
-            total_row.append(f"{emp_week_total[emp]:.1f} hr" if emp_week_total[emp] > 0 else "")
-        total_row.append("")
-        roster_table.append(total_row)
+        pdf_path=f"{ROSTERS_DIR}/roster_{sd.strftime('%Y%m%d')}_{ed.strftime('%Y%m%d')}.pdf"
+        pdf_generator.generate_roster_pdf(table,filename=pdf_path)
 
-        pdf_filename = f"final_roster_{sd.strftime('%Y-%m-%d')}_to_{end_date_entry.get_date().strftime('%Y-%m-%d')}.pdf"
-        pdf_generator.generate_roster_pdf(roster_table, filename=pdf_filename)
+        # preview window
+        pv=tk.Toplevel(); pv.title("Roster PDF")
+        ttk.Label(pv,text=f"Saved: {pdf_path}",font=("Helvetica",9,"bold")
+                 ).pack(padx=10,pady=10)
+        bf=ttk.Frame(pv); bf.pack(pady=6)
+        def _view():  os.startfile(pdf_path) if os.name=="nt" else os.system(f'xdg-open "{pdf_path}"')
+        def _print(): os.startfile(pdf_path,"print") if os.name=="nt" else None
+        def _email():
+            with sqlite3.connect(DB_PATH) as con:
+                emails=[r[0] for r in con.execute("SELECT email FROM staff")]
+            email_sender.open_email_client(emails,
+                f"Roster {sd_s} to {ed_s}","See attached roster",attachment_path=pdf_path)
+        ttk.Button(bf,text="View", command=_view ).grid(row=0,column=0,padx=4)
+        ttk.Button(bf,text="Print",command=_print).grid(row=0,column=1,padx=4)
+        ttk.Button(bf,text="Email",command=_email).grid(row=0,column=2,padx=4)
+        ttk.Button(bf,text="Close",command=pv.destroy).grid(row=0,column=3,padx=4)
 
-        preview_window = tk.Toplevel(frame)
-        preview_window.title("Roster Preview")
-        preview_window.geometry("450x250")
-        ttk.Label(preview_window, text=f"Roster PDF generated:\n{pdf_filename}", font=("Helvetica", 10, "bold")).pack(padx=10, pady=10)
-        btn_frame = ttk.Frame(preview_window)
-        btn_frame.pack(pady=10)
+    ttk.Button(frame,text="Finalize Roster",command=finalize
+              ).pack(side="bottom",fill="x", padx=10, pady=8)
 
-        def view_pdf():
-            try:
-                os.startfile(pdf_filename)
-            except Exception as ex:
-                messagebox.showerror("Error", f"Could not open PDF: {ex}")
+    # first build
+    start_e.set_date(datetime.date.today())
+    build_week()
+    start_e.bind("<<DateEntrySelected>>", lambda e: build_week())
 
-        def print_pdf():
-            try:
-                os.startfile(pdf_filename, "print")
-            except Exception as ex:
-                messagebox.showerror("Error", f"Could not print PDF: {ex}")
+# --------------------------------------------------------------------------- #
+#  5 ── CHANGE PASSWORD TAB                                                   #
+# --------------------------------------------------------------------------- #
+def init_password_tab(frame:tk.Frame):
+    ttk.Label(frame,text="Current").grid(row=0,column=0,sticky="e",padx=5,pady=4)
+    cur_e=ttk.Entry(frame,show="*"); cur_e.grid(row=0,column=1,padx=5)
+    ttk.Label(frame,text="New").grid    (row=1,column=0,sticky="e",padx=5)
+    new_e=ttk.Entry(frame,show="*"); new_e.grid(row=1,column=1,padx=5)
+    ttk.Label(frame,text="Confirm").grid(row=2,column=0,sticky="e",padx=5)
+    conf_e=ttk.Entry(frame,show="*"); conf_e.grid(row=2,column=1,padx=5)
 
-        def edit_roster():
-            preview_window.destroy()
+    def change_pw():
+        cur,new,cf=cur_e.get(),new_e.get(),conf_e.get()
+        if new!=cf: messagebox.showerror("Err","Mismatch"); return
+        with sqlite3.connect(DB_PATH) as con:
+            pw=con.execute("SELECT password FROM managers WHERE username=?",
+                           (current_manager,)).fetchone()
+            if not pw or pw[0]!=cur:
+                messagebox.showerror("Err","Wrong current"); return
+            con.execute("UPDATE managers SET password=? WHERE username=?", (new,current_manager))
+            messagebox.showinfo("Ok","Password changed.")
+        for e in (cur_e,new_e,conf_e): e.delete(0,tk.END)
+    ttk.Button(frame,text="Change",command=change_pw
+              ).grid(row=3,column=0,columnspan=2,pady=8)
 
-        def confirm_roster():
-            conn = sqlite3.connect('roster.db')
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO roster (start_date, end_date, pdf_file) VALUES (?, ?, ?)",
-                           (sd.strftime("%Y-%m-%d"), end_date_entry.get_date().strftime("%Y-%m-%d"), pdf_filename))
-            conn.commit()
-            conn.close()
-            preview_window.destroy()
-            conn = sqlite3.connect('roster.db')
-            cur = conn.cursor()
-            cur.execute("SELECT email FROM staff")
-            emails = [row[0] for row in cur.fetchall()]
-            conn.close()
-            subject = f"Roster for {sd.strftime('%Y-%m-%d')} to {end_date_entry.get_date().strftime('%Y-%m-%d')}"
-            body = "Please find attached the finalized roster."
-            email_sender.open_email_client(emails, subject, body, attachment_path=pdf_filename)
-            messagebox.showinfo("Roster Confirmed", "Roster saved and email client launched.")
-
-        ttk.Button(btn_frame, text="View PDF", command=view_pdf).grid(row=0, column=0, padx=5)
-        ttk.Button(btn_frame, text="Print", command=print_pdf).grid(row=0, column=1, padx=5)
-        ttk.Button(btn_frame, text="Edit", command=edit_roster).grid(row=0, column=2, padx=5)
-        ttk.Button(btn_frame, text="Confirm", command=confirm_roster).grid(row=0, column=3, padx=5)
-
-    # Here we ensure the Finalize Roster button is explicitly placed after the week view
-        # --- FINALIZE ROSTER BUTTON ---
-    finalize_frame = ttk.Frame(frame, padding=10)
-    finalize_frame.pack(side="bottom", fill="x", padx=10, pady=10)
-    finalize_frame.place(relx=0, rely=0.95, relwidth=1)
-    finalize_button = ttk.Button(finalize_frame, text="Finalize Roster", command=finalize_roster)
-    finalize_button.pack(pady=5)
-
-
-#########################################
-# Change Password Tab
-#########################################
-def init_password_tab(frame):
-    """Initialize the Change Password tab."""
-    ttk.Label(frame, text="Current Password:").grid(row=0, column=0, padx=5, pady=5, sticky="e")
-    current_pass_entry = tk.Entry(frame, width=20, show="*")
-    current_pass_entry.grid(row=0, column=1, padx=5, pady=5)
-
-    ttk.Label(frame, text="New Password:").grid(row=1, column=0, padx=5, pady=5, sticky="e")
-    new_pass_entry = tk.Entry(frame, width=20, show="*")
-    new_pass_entry.grid(row=1, column=1, padx=5, pady=5)
-
-    ttk.Label(frame, text="Confirm New Password:").grid(row=2, column=0, padx=5, pady=5, sticky="e")
-    confirm_pass_entry = tk.Entry(frame, width=20, show="*")
-    confirm_pass_entry.grid(row=2, column=1, padx=5, pady=5)
-
-    def change_password():
-        current_password = current_pass_entry.get()
-        new_password = new_pass_entry.get()
-        confirm_password = confirm_pass_entry.get()
-        if new_password != confirm_password:
-            messagebox.showerror("Error", "New passwords do not match.")
-            return
-
-        conn = sqlite3.connect('roster.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT password FROM managers WHERE username=?", (current_manager,))
-        current_db_pass = cursor.fetchone()
-        if not current_db_pass:
-            messagebox.showerror("Error", "Manager record not found.")
-            conn.close()
-            return
-
-        if current_password != current_db_pass[0]:
-            messagebox.showerror("Error", "Current password is incorrect.")
-            conn.close()
-            return
-
-        cursor.execute("UPDATE managers SET password=? WHERE username=?", (new_password, current_manager))
-        conn.commit()
-        conn.close()
-        messagebox.showinfo("Success", "Password changed successfully.")
-        current_pass_entry.delete(0, tk.END)
-        new_pass_entry.delete(0, tk.END)
-        confirm_pass_entry.delete(0, tk.END)
-
-    ttk.Button(frame, text="Change Password", command=change_password).grid(row=3, column=0, columnspan=2, pady=10)
-
-
-# End of dashboard.py
+# --------------------------------------------------------------------------- #
+#  6 ── quick‑launch for standalone testing                                   #
+# --------------------------------------------------------------------------- #
+if __name__=="__main__":
+    launch_dashboard("admin")
