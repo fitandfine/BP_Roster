@@ -54,7 +54,7 @@ def create_tables(conn):
             start_time TEXT,   -- HH:MM
             end_time   TEXT,   -- HH:MM
             note       TEXT,   -- Optional daily note for the duty day
-            FOREIGN KEY(roster_id) REFERENCES roster(roster_id)
+            FOREIGN KEY(roster_id) REFERENCES roster(roster_id) ON DELETE CASCADE
         )
     ''')
 

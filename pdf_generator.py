@@ -1,25 +1,43 @@
-"""
-This module generates a PDF roster using ReportLab.
-The PDF is generated in landscape mode.
-"""
-
-from reportlab.lib.pagesizes import landscape, letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+# pdf_generator.py  ─────────────────────────────────────────────────────────
 from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
-def generate_roster_pdf(roster_data, filename="final_roster.pdf"):
+def generate_roster_pdf(table_data, *, filename, title=None):
     """
-    Generates a PDF using the provided roster_data.
-    
-    :param roster_data: A list of lists representing table rows and columns.
-    :param filename: The name for the output PDF file.
+    table_data : list[list[str]]
+        A 2‑D array of strings already prepared by dashboard.py
+        (the first row may be a one‑cell title – see below).
+    filename   : str
+        Target PDF file (will be overwritten).
+    title      : str | None
+        Optional document title; drawn in bold above the table.
     """
-    # Create the document with a landscape letter page size
-    doc = SimpleDocTemplate(filename, pagesize=landscape(letter))
-    table = Table(roster_data)
-    
-    # Define the table style
-    style = TableStyle([
+    doc  = SimpleDocTemplate(
+        filename,
+        pagesize=landscape(A4),
+        rightMargin=20, leftMargin=20,
+        topMargin=25,  bottomMargin=25
+    )
+
+    story = []
+    styles = getSampleStyleSheet()
+
+    if title:                                        # top‑of‑page title
+        story.append(Paragraph(f"<b>{title}</b>", styles["Title"]))
+        story.append(Spacer(1, 12))                  # 12 pt gap
+
+    # Detect a single‑cell title row (the patch in dashboard.py adds it)
+    first_row_is_heading = (
+        len(table_data) > 0
+        and len(set(map(len, table_data))) == 1      # all rows equal length
+        and any(table_data[0][1:]) is False          # only first cell populated
+    )
+
+    tbl = Table(table_data)
+
+    ts  = TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.black),   # Header background color
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),     # Header text color
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),                 # Center align all cells
@@ -28,20 +46,15 @@ def generate_roster_pdf(roster_data, filename="final_roster.pdf"):
         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
         ('GRID', (0, 0), (-1, -1), 1, colors.black)            # Grid lines
     ])
-    table.setStyle(style)
-    
-    # Build the PDF document
-    try:
-        doc.build([table])
-    except Exception as e:
-        print("Error generating PDF:", e)
 
-# For testing: Uncomment to generate a sample PDF.
-# if __name__ == '__main__':
-#     sample_data = [
-#         ["Day/Name", "Alice", "Bob", "Weekly Total"],
-#         ["Monday", "8", "6", "14"],
-#         ["Tuesday", "7", "5", "12"],
-#         ["Weekly Total", "15", "11", ""]
-#     ]
-#     generate_roster_pdf(sample_data, filename="test_roster.pdf")
+    if first_row_is_heading:
+        n_cols = len(table_data[0])
+        ts.add("SPAN",  (0, 0), (n_cols - 1, 0))     # span the heading row
+        ts.add("BACKGROUND", (0, 0), (0, 0), colors.lightgrey)
+        ts.add("ALIGN",      (0, 0), (0, 0), "CENTER")
+        ts.add("FONTSIZE",   (0, 0), (0, 0), 12)
+        ts.add("BOTTOMPADDING", (0, 0), (0, 0), 6)
+
+    tbl.setStyle(ts)
+    story.append(tbl)
+    doc.build(story)
