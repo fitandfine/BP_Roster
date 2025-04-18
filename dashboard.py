@@ -56,6 +56,7 @@ def launch_dashboard(manager_username: str):
     emp_tab   = ttk.Frame(nb); nb.add(emp_tab , text="Employee Management")
     rost_tab  = ttk.Frame(nb); nb.add(rost_tab, text="Roster Creation")
     pwd_tab   = ttk.Frame(nb); nb.add(pwd_tab , text="Change Password")
+    
     about_tab = ttk.Frame(nb); nb.add(about_tab, text="About")
 
     # so employee tab can trigger live refresh of roster view
@@ -64,7 +65,13 @@ def launch_dashboard(manager_username: str):
     init_employee_tab(emp_tab , rost_tab)
     init_roster_tab  (rost_tab)
     init_password_tab(pwd_tab)
-    init_about_tab  (about_tab)
+    help_tab = ttk.Frame(nb); nb.add(help_tab, text="Help")
+    init_help_tab(help_tab)
+    init_about_tab(about_tab)
+    
+    
+
+   
 
     root.mainloop()
 
@@ -206,11 +213,28 @@ def init_roster_tab(tab: tk.Frame):
     finalize_btn = ttk.Button(top,text="Finalize Roster"); finalize_btn.grid(row=0,column=6,padx=(16,2))
     start_new_btn=ttk.Button(top,text="Start New");       start_new_btn.grid(row=0,column=7)
 
+        # ---------------------------------------------------------------
     def _refresh_hist():
+        """
+        Populate the 'Previous' combobox with ALL roster versions,
+        even those with identical dates, using created_at timestamp to uniquely label.
+        """
         with sqlite3.connect(DB) as con:
-            rows=con.execute("SELECT roster_id,start_date,end_date FROM roster ORDER BY roster_id DESC").fetchall()
-        prev_cb["values"]=[f"{r[0]}: {r[1]} → {r[2]}" for r in rows]
-    _refresh_hist()
+            rows = con.execute("""
+                SELECT roster_id, start_date, end_date, created_at
+                FROM roster
+            ORDER BY created_at DESC
+            """).fetchall()
+
+        # Format: "123: 2024-04-01 → 2024-04-07 @ 2024-04-01 15:30:42"
+        values = [
+            f"{rid}: {sd} → {ed} @ {ts}"
+            for rid, sd, ed, ts in rows
+        ]
+
+        prev_cb["values"] = values
+
+
 
     # main split ------------------------------------------------------------
     main=ttk.Frame(tab); main.pack(fill="both",expand=True,padx=10,pady=5)
@@ -219,6 +243,7 @@ def init_roster_tab(tab: tk.Frame):
     hours_lb=tk.Listbox(side_fr,width=28); hours_lb.pack(fill="y",expand=True,padx=5,pady=5)
 
     day_lbs,note_entries={},{}
+    _refresh_hist()
 
     # ----------------------------------------------------------------------
     def recalc_hours():
@@ -371,34 +396,96 @@ def init_roster_tab(tab: tk.Frame):
     start_new_btn.configure(command=start_new)
 
     # load previous ---------------------------------------------------------
+        # ── load previous roster (now guaranteed to bring in ONLY the rows that
+    #    belong to the selected roster_id – even if several rosters were
+    #    created for the same start / end date) ────────────────────────────
     def load_prev(_=None):
-        sel=prev_v.get()
-        if not sel: return
-        rid=int(sel.split(":")[0])
-        for v in global_duties.values(): v.clear()
+        sel = prev_v.get()
+        if not sel:                                  # nothing selected
+            return
+
+        try:
+            rid = int(sel.split(":")[0].strip())
+        except ValueError:
+            messagebox.showerror("Error", "Failed to parse selected roster ID.")
+            return
+
+
+        # 1) completely reset every in‑memory container  ───────────────────
+        #    (re‑creating the dict avoids “dangling” list references that
+        #     were the real cause of the duplicated lines seen on screen)
+        global global_duties, roster_duties, special_notes
+        global_duties  = {d: [] for d in DAYNAMES}
+        roster_duties.clear()
         special_notes.clear()
+
+        # 2) pull duties / notes only for THAT roster_id  ──────────────────
         with sqlite3.connect(DB) as con:
-            cur=con.cursor()
-            rows=cur.execute("""SELECT duty_date,employee,start_time,end_time,note
-                                FROM roster_duties WHERE roster_id=?""",(rid,)).fetchall()
-            sd_s,ed_s=cur.execute("SELECT start_date,end_date FROM roster WHERE roster_id=?",(rid,)).fetchone()
-        seen=set()
-        for ds,emp,st,et,note in rows:
-            if (ds,emp,st,et) in seen: continue
-            seen.add((ds,emp,st,et))
-            wd=datetime.datetime.strptime(ds,"%Y-%m-%d").strftime("%A")
-            global_duties[wd].append({"employee":emp,"start":st,"end":et})
-            special_notes[ds]=note or ""
-        start_e.set_date(datetime.datetime.strptime(sd_s,"%Y-%m-%d").date())
-        end_e.configure(state="normal"); end_e.set_date(start_e.get_date()+datetime.timedelta(days=6)); end_e.configure(state="disabled")
+            cur   = con.cursor()
+            rows  = cur.execute("""
+                    SELECT duty_date, employee, start_time, end_time, note
+                      FROM roster_duties
+                     WHERE roster_id = ?""", (rid,)).fetchall()
+
+            sd_s, ed_s = cur.execute("""
+                    SELECT start_date, end_date
+                      FROM roster
+                     WHERE roster_id = ?""", (rid,)).fetchone()
+
+        # 3) copy the rows into the weekday template (no cross‑pollination)
+        seen = set()
+        for ds, emp, st, et, note in rows:
+            key = (ds, emp, st, et)
+            if key in seen:               # safeguard against accidental dupes
+                continue
+            seen.add(key)
+
+            wd = datetime.datetime.strptime(ds, "%Y-%m-%d").strftime("%A")
+            global_duties[wd].append(
+                {"employee": emp, "start": st, "end": et}
+            )
+            special_notes[ds] = note or ""
+
+        # 4) re‑display the selected week
+        start_e.set_date(datetime.datetime.strptime(sd_s, "%Y-%m-%d").date())
+        end_e.configure(state="normal")
+        end_e.set_date(start_e.get_date() + datetime.timedelta(days=6))
+        end_e.configure(state="disabled")
+
         build_week()
-        for ds,txt in special_notes.items():
+
+        # 5) restore the notes in their entry boxes
+        for ds, txt in special_notes.items():
             if ds in note_entries:
-                note_entries[ds].delete(0,tk.END); note_entries[ds].insert(0,txt)
-    prev_cb.bind("<<ComboboxSelected>>",load_prev)
+                note_entries[ds].delete(0, tk.END)
+                note_entries[ds].insert(0, txt)
+
+    prev_cb.bind("<<ComboboxSelected>>", load_prev)
+
 
     # finalize --------------------------------------------------------------
     def finalize():
+        # Prevent duplicate finalize calls in rapid clicks
+        finalize_btn.configure(state="disabled")
+        tab.after(3000, lambda: finalize_btn.configure(state="normal"))  # Re-enable after 3s
+
+        # Check if this roster (same duties + notes) is already saved
+        with sqlite3.connect(DB) as con:
+            existing_rows = con.execute("""
+                SELECT duty_date, employee, start_time, end_time
+                FROM roster_duties
+                WHERE roster_id = (SELECT MAX(roster_id) FROM roster)
+            """).fetchall()
+
+            current_rows = []
+            for ds, dl in roster_duties.items():
+                for d in dl:
+                    current_rows.append((ds, d['employee'], d['start'], d['end']))
+
+            if set(existing_rows) == set(current_rows):
+                messagebox.showinfo("Duplicate Detected", "This roster already exists. Not saving again.")
+                return
+
         for ds,en in note_entries.items(): special_notes[ds]=en.get()
         sd=start_e.get_date(); ed=end_e.get_date()
         sd_s,ed_s=sd.strftime("%Y-%m-%d"),ed.strftime("%Y-%m-%d")
@@ -432,8 +519,11 @@ def init_roster_tab(tab: tk.Frame):
             row.append(special_notes.get(ds,"")); table.append(row)
         table.append(["Weekly Total"]+[f"{totals[e]:.1f} h" for e in emp_names]+[""])
 
-        pdf_path=os.path.abspath(os.path.join(
-            ROSTERS_DIR,f"roster_{sd.strftime('%Y%m%d')}_{ed.strftime('%Y%m%d')}.pdf"))
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%Y%m%d_%H%M%S")
+        pdf_path = os.path.abspath(os.path.join(
+            ROSTERS_DIR, f"roster_{timestamp}.pdf"))
+
         title_line=f"Roster for BP Eltham from {sd_s} to {ed_s}"
         # try title kw, fall back if pdf_generator doesn't accept it
         try:
@@ -488,15 +578,72 @@ def init_password_tab(tab: tk.Frame):
     ttk.Button(tab,text="Change",command=chg).grid(row=3,column=0,columnspan=2,pady=8)
 
 
-# ═════════════════════ about tab ═══════════════════════════════════════════
+# ═════════════════════ help tab (User Manual) ════════════════════════════════════════════
+def init_help_tab(tab: tk.Frame):
+    help_text = """
+📘 Roster Management System – User Manual
+
+🔹 Main Features:
+- Manage employees (add, update, delete)
+- Create new weekly rosters
+- View/edit previously created rosters
+- Export rosters to PDF with automatic summaries
+- Add daily special notes for each day
+- View employee workload summary
+- Change admin password
+
+───────────────────────────────────────
+👤 Employee Management Tab:
+- Use the form to enter employee name, email, phone, weekly hour limit, and unavailable days.
+- Press 'Add / Update' to save or update employee records.
+- Select an employee from the list and press 'Delete' to remove them.
+- 'Copy ALL emails' lets you copy all staff emails at once for quick use.
+
+📅 Roster Creation Tab:
+- Use the start date picker to define the week. The end date auto-fills.
+- View and assign staff duties per day using the 'Add' button. You can also 'Edit' or 'Remove'.
+- Notes can be added for each day.
+- Press 'Finalize Roster' to save and generate a PDF. The file is auto-timestamped to avoid overwrites.
+- Use the 'Previous' dropdown to load any saved roster (even if the dates are same – timestamp is used).
+
+🔑 Change Password Tab:
+- Change the current admin password after validating the current one.
+
+🆘 Help Tab:
+- Shows this user manual.
+
+ℹ️ About Tab:
+- Shows contact and author information with clickable URL and phone number.
+
+──────────────
+🔒 Security Tip:
+Use unique and strong passwords for your admin account.
+"""
+    text_box = tk.Text(tab, wrap="word", font=("Consolas", 10), padx=10, pady=10)
+    text_box.insert("1.0", help_text)
+    text_box.configure(state="disabled")
+    text_box.pack(fill="both", expand=True)
+
+
+
+# ═════════════════════ about tab (Updated, no popups) ════════════════════════════════════
 def init_about_tab(tab: tk.Frame):
-    def show():
-        messagebox.showinfo("About",
-            "Developed by Anup Chapain for BP Eltham, Taranaki\n"
-            "https://fitandfine.github.io/anup\n"
-            "email: emailofanup@gmail.com",
-            parent=tab)
-    ttk.Button(tab,text="About this software",command=show).pack(expand=True,pady=40)
+    about_text = (
+        "👨‍💻 Developed by Anup Chapain for BP Eltham, Taranaki\n\n"
+        "🌐 Website:\nhttps://fitandfine.github.io/anup\n\n"
+        "📧 Email:\nemailofanup@gmail.com\n\n"
+        "📞 Phone:\n0273276110"
+    )
+
+    lbl = tk.Label(tab, text=about_text, justify="left", anchor="nw", font=("Segoe UI", 10), fg="#0000ee", cursor="hand2")
+    lbl.pack(padx=10, pady=10, anchor="nw")
+
+    def open_url(event):
+        import webbrowser
+        webbrowser.open("https://fitandfine.github.io/anup")
+
+    lbl.bind("<Button-1>", open_url)
+
 
 
 # ═════════════════════ standalone test ═════════════════════════════════════

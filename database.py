@@ -41,7 +41,8 @@ def create_tables(conn):
             roster_id INTEGER PRIMARY KEY AUTOINCREMENT,
             start_date TEXT,
             end_date   TEXT,
-            pdf_file   TEXT  -- Path to the generated PDF file (inside Rosters/)
+            pdf_file   TEXT,  -- Path to the generated PDF file (inside Rosters/)
+            created_at  TEXT DEFAULT CURRENT_TIMESTAMP       
         )
     ''')
 
