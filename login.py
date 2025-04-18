@@ -7,11 +7,15 @@ On successful login, it launches the manager dashboard.
 import tkinter as tk
 from tkinter import messagebox
 import sqlite3
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 import dashboard  # This module will open the main dashboard after login
 
 def verify_login(username, password):
     """Verify manager credentials against the database."""
-    conn = sqlite3.connect('roster.db')
+    conn = sqlite3.connect(os.path.join(BASE_DIR, 'roster.db'))
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM managers WHERE username=? AND password=?", (username, password))
     result = cursor.fetchone()
