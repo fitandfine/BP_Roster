@@ -1,5 +1,4 @@
-roster/
-./roster
 /roster
-./roster.db
-./Rosters/
+/roster.db
+/Rosters
+/__pycache__
