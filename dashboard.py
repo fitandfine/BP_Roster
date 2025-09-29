@@ -7,6 +7,7 @@ Dashboard – Roster Management System
 ✓ About
 """
 
+import subprocess
 import os, sqlite3, datetime, tkinter as tk
 from   tkinter import ttk, messagebox
 import pdf_generator                 
@@ -16,6 +17,7 @@ BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB         = os.path.join(BASE_DIR, "roster.db")
 ROSTERSDIR = os.path.join(BASE_DIR, "Rosters")
 os.makedirs(ROSTERSDIR, exist_ok=True)
+HOST_OPEN_WRAPPER_PATH = os.path.join(BASE_DIR, "host-open.sh")
 
 try:
     from tkcalendar import DateEntry
@@ -472,11 +474,14 @@ def init_roster_tab(tab:tk.Frame):
         pv=tk.Toplevel(); pv.title("Roster PDF")
         ttk.Label(pv,text=pdf_path,font=("Helvetica",9,"bold")).pack(padx=10,pady=10)
         bf=ttk.Frame(pv); bf.pack(pady=6)
-        open_pdf = (
-    lambda: os.startfile(pdf_path) 
-    if os.name == "nt" 
-    else os.system(f'./host-open.sh "{pdf_path}"')
-)
+        def open_pdf():
+            if os.name == "nt":
+                os.startfile(pdf_path)
+            else:
+                try:
+                    subprocess.run([HOST_OPEN_WRAPPER_PATH, pdf_path], check=True)
+                except subprocess.CalledProcessError as e:
+                    messagebox.showerror("Execution Error", f"Failed to run host opener for PDF. Error: {e}", parent=pv)
 
         def copy_mails():
             with sqlite3.connect(DB) as con:
@@ -487,8 +492,12 @@ def init_roster_tab(tab:tk.Frame):
             if os.name == "nt":
                 os.startfile(os.path.abspath(ROSTERSDIR))
             else:
-                os.system(f'./host-open.sh "{ROSTERSDIR}"')
-                
+                # MODIFIED: Use subprocess.run for reliable shell command execution
+                try:
+                    subprocess.run([HOST_OPEN_WRAPPER_PATH, os.path.abspath(ROSTERSDIR)], check=True)
+                except subprocess.CalledProcessError as e:
+                    messagebox.showerror("Execution Error", f"Failed to run host opener for folder. Error: {e}", parent=pv)
+
         for txt,cmd,col in (("View",open_pdf,0),
                             ("Copy emails",copy_mails,1),
                             ("Open folder",open_folder,2),
