@@ -1,6 +1,6 @@
 babel==2.17.0
 chardet==5.2.0
 pillow==11.2.1
-pywin32==310
+pywin32==310 ; platform_system == "Windows"
 reportlab==4.3.1
 tkcalendar==1.6.1

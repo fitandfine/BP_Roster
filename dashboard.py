@@ -9,7 +9,7 @@ Dashboard – Roster Management System
 
 import os, sqlite3, datetime, tkinter as tk
 from   tkinter import ttk, messagebox
-import pdf_generator                 # ← your own module
+import pdf_generator                 
 
 # ───────────────────────── constants ──────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -552,7 +552,7 @@ def init_help_tab(tab: tk.Frame):
 - Shows this user manual.
 
 ℹ️ About Tab:
-- Shows contact and author information with clickable URL and phone number.
+- Shows contact and author information with clickable URL and email.
 
 ──────────────
 🔒 Security Tip:
@@ -571,7 +571,7 @@ def init_about_tab(tab: tk.Frame):
         "👨‍💻 Developed by Anup Chapain for BP Eltham, Taranaki\n\n"
         "🌐 Website:\nhttps://fitandfine.github.io/anup\n\n"
         "📧 Email:\nemailofanup@gmail.com\n\n"
-        "📞 Phone:\n0273276110"
+        "📞 Phone:\n027******"
     )
 
     lbl = tk.Label(tab, text=about_text, justify="left", anchor="nw", font=("Segoe UI", 10), fg="#0000ee", cursor="hand2")

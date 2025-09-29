@@ -1,4 +1,5 @@
 roster/
 ./roster
 /roster
-
+./roster.db
+./Rosters/

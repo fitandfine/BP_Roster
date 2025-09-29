@@ -9,20 +9,25 @@ if hasattr(sys, '_MEIPASS'):
     DB_PATH = os.path.join(os.path.dirname(sys.executable), "roster.db")
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    INIT_SETUP_PATH = os.path.join(BASE_DIR, "init_setup.exe")
+    INIT_SETUP_PATH = os.path.join(BASE_DIR, "init_setup.py")
     DB_PATH = os.path.join(BASE_DIR, "roster.db")
 
 # Run init_setup if DB doesn't exist (or is corrupted)
 def ensure_database():
+    # Use the current Python interpreter (sys.executable) to run the setup script
+    setup_command = [sys.executable, INIT_SETUP_PATH]
+    
     if not os.path.exists(DB_PATH):
-        subprocess.run([INIT_SETUP_PATH], check=True)
+        # NOTE: Using setup_command list here
+        subprocess.run(setup_command, check=True)
     else:
         import sqlite3
         try:
             with sqlite3.connect(DB_PATH) as con:
                 con.execute("SELECT COUNT(*) FROM managers")
         except:
-            subprocess.run([INIT_SETUP_PATH], check=True)
+            # NOTE: Using setup_command list here
+            subprocess.run(setup_command, check=True)
 
 ensure_database()
 
