@@ -472,15 +472,23 @@ def init_roster_tab(tab:tk.Frame):
         pv=tk.Toplevel(); pv.title("Roster PDF")
         ttk.Label(pv,text=pdf_path,font=("Helvetica",9,"bold")).pack(padx=10,pady=10)
         bf=ttk.Frame(pv); bf.pack(pady=6)
-        open_pdf=lambda: os.startfile(pdf_path) if os.name=="nt" else os.system(f'xdg-open \"{pdf_path}\"')
+        open_pdf = (
+    lambda: os.startfile(pdf_path) 
+    if os.name == "nt" 
+    else os.system(f'./host-open.sh "{pdf_path}"')
+)
+
         def copy_mails():
             with sqlite3.connect(DB) as con:
                 mails=",".join(e for e, in con.execute("SELECT email FROM staff"))
             pv.clipboard_clear(); pv.clipboard_append(mails)
             messagebox.showinfo("Copied",f"{len(mails.split(','))} addresses copied.",parent=pv)
         def open_folder():
-            os.startfile(os.path.abspath(ROSTERSDIR)) if os.name=="nt" else os.system(f'xdg-open \"{ROSTERSDIR}\"')
-
+            if os.name == "nt":
+                os.startfile(os.path.abspath(ROSTERSDIR))
+            else:
+                os.system(f'./host-open.sh "{ROSTERSDIR}"')
+                
         for txt,cmd,col in (("View",open_pdf,0),
                             ("Copy emails",copy_mails,1),
                             ("Open folder",open_folder,2),
