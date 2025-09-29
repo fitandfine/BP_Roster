@@ -10,14 +10,18 @@ Dashboard – Roster Management System
 import subprocess
 import os, sqlite3, datetime, tkinter as tk
 from   tkinter import ttk, messagebox
-import pdf_generator                 
+import pdf_generator       
+import platform
+import webbrowser          
 
 # ───────────────────────── constants ──────────────────────────────────────
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 DB         = os.path.join(BASE_DIR, "roster.db")
 ROSTERSDIR = os.path.join(BASE_DIR, "Rosters")
 os.makedirs(ROSTERSDIR, exist_ok=True)
-HOST_OPEN_WRAPPER_PATH = os.path.join(BASE_DIR, "host-open.sh")
+#HOST_OPEN_WRAPPER_PATH = os.path.join(BASE_DIR, "host-open.sh")
+#HOST_OPEN_WRAPPER_PATH = "/usr/local/bin/host-open.sh"
+
 
 try:
     from tkcalendar import DateEntry
@@ -44,6 +48,36 @@ global_duties = {d: [] for d in DAYNAMES}
 roster_duties = {}
 # per‑date note
 special_notes = {}
+
+# ─────────────────────── host open wrapper ────────────────────────────────
+def open_host(target: str):
+    """
+    Opens a file, folder, or URL on the host machine or inside Docker.
+    Falls back to xdg-open or Firefox inside Docker.
+    """
+    target_path = os.path.abspath(target) if os.path.exists(target) else target
+    system = platform.system()
+    in_docker = os.environ.get("RUNNING_IN_DOCKER") == "1"
+
+    try:
+        if system == "Windows":
+            os.startfile(target_path)
+        elif system == "Darwin":
+            subprocess.run(["open", target_path], check=False)
+        elif system == "Linux":
+            if in_docker:
+                # Try xdg-open first, fallback to firefox
+                try:
+                    subprocess.run(["xdg-open", target_path], check=True)
+                except subprocess.CalledProcessError:
+                    subprocess.run(["firefox", target_path], check=False)
+            else:
+                # normal Linux outside Docker
+                subprocess.run(["xdg-open", target_path], check=False)
+        else:
+            webbrowser.open(target_path)
+    except Exception as e:
+        print(f"Failed to open {target_path}: {e}")
 
 # ═════════════════════ launcher ═══════════════════════════════════════════
 def launch_dashboard(manager_username:str):
@@ -397,9 +431,7 @@ def init_roster_tab(tab:tk.Frame):
 
     prev_cb.bind("<<ComboboxSelected>>", load_prev)
 
-    # ───────────── FINALISE (unchanged) -----------------------------------
-
-
+    
 
 
     # finalize --------------------------------------------------------------
@@ -479,7 +511,7 @@ def init_roster_tab(tab:tk.Frame):
                 os.startfile(pdf_path)
             else:
                 try:
-                    subprocess.run([HOST_OPEN_WRAPPER_PATH, pdf_path], check=True)
+                    open_host(pdf_path)
                 except subprocess.CalledProcessError as e:
                     messagebox.showerror("Execution Error", f"Failed to run host opener for PDF. Error: {e}", parent=pv)
 
@@ -494,7 +526,7 @@ def init_roster_tab(tab:tk.Frame):
             else:
                 # MODIFIED: Use subprocess.run for reliable shell command execution
                 try:
-                    subprocess.run([HOST_OPEN_WRAPPER_PATH, os.path.abspath(ROSTERSDIR)], check=True)
+                    open_host(os.path.abspath(ROSTERSDIR))
                 except subprocess.CalledProcessError as e:
                     messagebox.showerror("Execution Error", f"Failed to run host opener for folder. Error: {e}", parent=pv)
 
@@ -595,8 +627,12 @@ def init_about_tab(tab: tk.Frame):
     lbl.pack(padx=10, pady=10, anchor="nw")
 
     def open_url(event):
-        import webbrowser
-        webbrowser.open("https://fitandfine.github.io/anup")
+        try:
+           open_host("https://fitandfine.github.io/anup")
+        except subprocess.CalledProcessError as e:
+            messagebox.showerror("Execution Error", 
+                                 f"Failed to open link via host wrapper. Error: {e}", 
+                                 parent=tab)
 
     lbl.bind("<Button-1>", open_url)
 

@@ -16,7 +16,9 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
+echo "Attempting to open file on Host: $1"
+
 # Use xdg-open, which is the standard way to delegate file opening.
-# This assumes a minimalist viewer/browser (like 'x-www-browser' or 'evince')
-# has been installed in your Docker image.
-nohup xdg-open "$1" &>/dev/null &
+# We have removed the error suppression to make debugging possible.
+# The output (including errors) will now print to the terminal.
+nohup xdg-open "$1" &

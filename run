@@ -3,7 +3,30 @@ xhost +local:docker
 docker run -it \
     --rm \
     -e DISPLAY=$DISPLAY \
+    -e RUNNING_IN_DOCKER=1 \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v $HOME/.Xauthority:/root/.Xauthority:ro \
     -v $(pwd):/app \
-    --user $HOST_UID:$HOST_GID \
     roster-app
+
+```
+Explanation:
+
+-it: Interactive terminal (optional, helps for debugging).
+
+--rm: Remove container after exit.
+
+-e DISPLAY=$DISPLAY: Pass host X11 display to container for GUI.
+
+-e RUNNING_IN_DOCKER=1: Flag so open_host() knows it’s in Docker.
+
+-v /tmp/.X11-unix:/tmp/.X11-unix: Share X11 socket for GUI forwarding.
+
+-v $HOME/.Xauthority:/root/.Xauthority:ro: Allow authentication with host X server.
+
+-v /path/to/your/project:/app: Mount your project folder into container.
+
+python-tk-roster: Docker image name (build it from your Dockerfile).
+
+python main.py: Run your Tkinter app inside container.
+```

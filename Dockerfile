@@ -1,12 +1,12 @@
 # ───────────── Base Python image ─────────────
 FROM python:3.11-slim
 
-# ───────────── Install Tkinter + X11 support ─────────────
-RUN apt-get update && apt-get install -y \
+# ───────────── Install Tkinter + minimal GUI + xdg-open ─────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-tk \
     tk-dev \
-    x11-apps \
     xdg-utils \
+    firefox-esr \
     && rm -rf /var/lib/apt/lists/*
 
 # ───────────── Set working directory ─────────────
@@ -18,8 +18,12 @@ COPY . /app
 # ───────────── Install Python dependencies ─────────────
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ───────────── Create folders if not exist ─────────────
+# ───────────── Ensure rosters folder exists ─────────────
 RUN mkdir -p /app/Rosters
 
-# ───────────── Run the main Tkinter app ─────────────
+# ───────────── Expose X11 (for GUI) ─────────────
+ENV DISPLAY=:0
+ENV RUNNING_IN_DOCKER=1
+
+# ───────────── Run Tkinter app ─────────────
 CMD ["python", "main.py"]
