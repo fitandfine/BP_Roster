@@ -209,6 +209,7 @@ docker run -it \
     -v $(pwd):/app \
     roster-app
 ```
+### Instead of manually typing these commands inside "run" file, make run file executable with chmod +x and run the container as ./run.
 
 **Author**: Anup Chapain
 **Contact**: [emailofanup@gmail.com](mailto:emailofanup@gmail.com)
